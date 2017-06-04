@@ -270,7 +270,7 @@ class DbTest extends TestCase
         $y = Db::load('test', 1);
         Assert::same($y->t, $x->t);
 
-        $date1 = new DateTime('10 Jun 2005');
+        $date1 = new DateTime('10 Jun 2005 -0700');
         $x = Db::dispense('test');
         $x->t = $date1;
         $x->store();
