@@ -1,0 +1,12 @@
+title: danieljames/database
+description: Some database stuff.
+version: "0.1"
+license: BSL-1.0
+authors:
+  - name: Daniel James
+    email: dnljms@gmail.com
+require-dev:
+  nette/tester: *
+autoload:
+  psr-4:
+    "DanielJames\\Database\\" : "src/"
