@@ -6,6 +6,9 @@ use DanielJames\Database\Db;
 
 require_once(__DIR__.'/bootstrap.php');
 
+// PHP insists that I set a timezone.
+date_default_timezone_set('Pacific/Chatham');
+
 class DbTest extends TestCase
 {
     function testException() {
@@ -270,7 +273,7 @@ class DbTest extends TestCase
         $y = Db::load('test', 1);
         Assert::same($y->t, $x->t);
 
-        $date1 = new DateTime('10 Jun 2005 -0700');
+        $date1 = new DateTime('10 Jun 2005');
         $x = Db::dispense('test');
         $x->t = $date1;
         $x->store();
