@@ -145,6 +145,14 @@ class DbTest extends TestCase
                 value TEXT DEFAULT 'something'
             );");
 
+        Assert::same(array(), Db::find('test'));
+        foreach(Db::findIterator('test') as $row) {
+            Assert::false(true);
+        }
+        foreach(Db::getIterator('select * from test') as $row) {
+            Assert::false(true);
+        }
+
         $x1 = Db::dispense('test');
 
         // TODO: Maybe filter out names with a certain convention?
@@ -192,11 +200,49 @@ class DbTest extends TestCase
         $rows[0]->store();
         $rows[1]->store();
 
+        $row_count = 0;
+        foreach(Db::findIterator('test') as $index => $row) {
+            Assert::same($row_count, $index);
+            ++$row_count;
+            switch($index) {
+            case 0:
+                Assert::same('1', $row->id);
+                Assert::same('1', $row->value);
+                break;
+            case 1:
+                Assert::same('2', $row->id);
+                Assert::same('2', $row->value);
+                break;
+                break;
+            default:
+                Assert::false(true);
+            }
+        }
+
         $rows2 = Db::getAll('select * from test');
         Assert::same('1', $rows2[0]['id']);
         Assert::same('1', $rows2[0]['value']);
         Assert::same('2', $rows2[1]['id']);
         Assert::same('2', $rows2[1]['value']);
+
+        $row_count = 0;
+        foreach(Db::getIterator('select * from test') as $index => $row) {
+            Assert::same($row_count, $index);
+            ++$row_count;
+            switch($index) {
+            case 0:
+                Assert::same('1', $row['id']);
+                Assert::same('1', $row['value']);
+                break;
+            case 1:
+                Assert::same('2', $row['id']);
+                Assert::same('2', $row['value']);
+                break;
+                break;
+            default:
+                Assert::false(true);
+            }
+        }
 
         $rows3 = Db::convertToBeans('test', $rows2);
         $rows3[0]->value = 'one';
