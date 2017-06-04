@@ -17,7 +17,7 @@ before_script:
   #- mysql -u root testbase < tests/testbase.sql
 
 script:
-  - ./vendor/bin/tester -p php-cgi -s ./tests/
+  - ./vendor/bin/tester -p php tests
 
 after_failure:
   # Prints *.actual files content
