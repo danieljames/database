@@ -153,6 +153,13 @@ class Db_Impl {
         }
     }
 
+    //
+    // Transactions
+    //
+
+    // Run $callback and wrap in a (possibly nested) transaction.
+    // If there's an exception rollback the transaction, even if nested.
+    //
     // This throws exceptions on error regardless of PDO's error mode
     public function transaction($callback) {
         if ($this->nestedBegin() === false) {
@@ -262,6 +269,10 @@ class Db_Impl {
         return $connection;
     }
 
+    //
+    // SQL commands
+    //
+
     public function exec($sql, $query_args = array()) {
         $statement = $this->pdo_connection->prepare($sql);
         return $statement && $statement->execute($query_args);
@@ -322,6 +333,10 @@ class Db_Impl {
             return false;
         }
     }
+
+    //
+    // 'Bean' getters/finders
+    //
 
     public function dispense($table_name) {
         $table = $this->getTable($table_name);
@@ -420,6 +435,10 @@ class Db_Impl {
         return $object;
     }
 
+    //
+    // Convert to bean.
+    //
+
     public function convertToBeans($table_name, $objects) {
         $table = $this->getTable($table_name);
         if (!$table) { return false; }
@@ -442,6 +461,10 @@ class Db_Impl {
         }
         return $result;
     }
+
+    //
+    // Bean modifiers
+    //
 
     public function store($object) {
         $table_name = $object->__meta->table->name;
