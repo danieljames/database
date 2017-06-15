@@ -289,7 +289,7 @@ class DbTest extends TestCase
         Assert::same(null, $x1->value8);
         $x1->id = 100;
         $x1->store();
-        Assert::same('100', $x1->id);
+        Assert::same('100', (string) $x1->id);
 
         $x2 = Db::load('test', 100);
         Assert::same('100', $x2->id);

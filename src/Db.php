@@ -48,7 +48,7 @@ class Db {
     static function getRow($sql, $query_args=array()) { return self::$instance->getRow($sql, $query_args); }
     static function getIterator($sql, $query_args=array()) { return self::$instance->getIterator($sql, $query_args); }
     static function dispense($table_name) { return self::$instance->dispense($table_name); }
-    static function load($table_name, $id) { return self::$instance->load($table_name, $id); }
+    static function load($table_name, $id) { $args = func_get_args(); return call_user_func_array(array(self::$instance, 'load'), $args); }
     static function find($table_name, $query = '', $query_args = array()) { return self::$instance->find($table_name, $query, $query_args); }
     static function findAll($table_name, $order_limit = '') { return self::$instance->findAll($table_name, $order_limit); }
     static function findOne($table_name, $query = '', $query_args = array()) { return self::$instance->findOne($table_name, $query, $query_args); }
@@ -89,21 +89,27 @@ class Db_EntityMetaData {
     var $connection;
     var $table;
     var $is_new;
+    var $primary_key_value;
 
-    function __construct($connection, $table, $is_new) {
+    function __construct($connection, $table, $is_new, $primary_key_value) {
         $this->connection = $connection;
         $this->table = $table;
         $this->is_new = $is_new;
+        $this->primary_key_value = $primary_key_value;
     }
 }
 
 class Db_TableSchema {
     var $name;
     var $columns;
+    var $primary_key;
+    var $row_id;
 
-    function __construct($name, $columns) {
+    function __construct($name, $columns, $primary_key, $row_id) {
         $this->name = $name;
         $this->columns = $columns;
+        $this->primary_key = $primary_key;
+        $this->row_id = $row_id;
     }
 }
 
@@ -241,12 +247,25 @@ class Db_Impl {
         foreach ($table->columns as $name => $default_value) {
             $object->{$name} = $default_value;
         }
-        $object->__meta = new Db_EntityMetaData($this, $table, true);
+        $object->__meta = new Db_EntityMetaData($this, $table, true, null);
         return $object;
     }
 
     public function load($table_name, $id) {
-        return $this->findOne($table_name, 'id = ?', array($id));
+        $table = $this->getTable($table_name);
+        if (!$table) { return false; }
+
+        $args = func_get_args();
+        array_shift($args);
+        assert(count($args) === count($table->primary_key));
+
+        $sql = '';
+        foreach($table->primary_key as $index => $column_name) {
+            if ($index) { $sql .= " AND "; }
+            $sql .= "`{$column_name}` = ?";
+        }
+
+        return $this->findOne($table_name, $sql, $args);
     }
 
     public function find($table_name, $query = '', array $query_args = array()) {
@@ -283,8 +302,14 @@ class Db_Impl {
     }
 
     private function createFindStatement($table_name, $query, array $query_args) {
-        $query = trim($query);
-        $sql = "SELECT * FROM `{$table_name}`";
+        $table = $this->getTable($table_name);
+        if (!$table) { return false; }
+
+        $sql = "SELECT ";
+        $sql .= implode(', ', array_map(
+            function($x) use($table_name) { return "`{$table_name}`.`{$x}`"; },
+            array_keys($table->columns)));
+        $sql .= " FROM `{$table_name}` ";
         if ($query) {
             if (preg_match('/^(where|join|order|limit)\b/i', $query)) {
                 $sql .= $query;
@@ -301,7 +326,13 @@ class Db_Impl {
     public function _fetchBean($table_name, $statement) {
         $object = $statement->fetchObject(self::$entity_object);
         if (!$object) { return null; }
-        $object->__meta = new Db_EntityMetaData($this, $this->getTable($table_name), false);
+
+        $primary_key = array();
+        foreach ($this->getTable($table_name)->primary_key as $column_name) {
+            $primary_key[$column_name] = $object->{$column_name};
+        }
+
+        $object->__meta = new Db_EntityMetaData($this, $this->getTable($table_name), false, $primary_key);
         return $object;
     }
 
@@ -318,7 +349,11 @@ class Db_Impl {
             foreach($array as $key => $value) {
                 $object->$key = $value;
             }
-            $object->__meta = new Db_EntityMetaData($this, $table, false);
+            $primary_key = array();
+            foreach ($this->getTable($table_name)->primary_key as $column_name) {
+                $primary_key[$column_name] = $object->{$column_name};
+            }
+            $object->__meta = new Db_EntityMetaData($this, $table, false, $primary_key);
             $result[] = $object;
         }
         return $result;
@@ -330,15 +365,9 @@ class Db_Impl {
 
         $update = array();
         $default_columns = array();
-        $id_name = null;
-        $id = null;
 
         foreach(get_object_vars($object) as $key => $value) {
             switch(strtolower($key)) {
-            case 'id':
-                $id_name = $key;
-                $id = $value;
-                break;
             case '__meta':
                 break;
             default:
@@ -355,13 +384,7 @@ class Db_Impl {
             }
         }
 
-        if (is_null($id_name) || !$id) { throw new RuntimeException("No id."); }
-
         if ($is_new) {
-            if (!$id instanceof Db_Default) {
-                $update[$id_name] = $id;
-            }
-
             $sql = "INSERT INTO `{$table_name}` ";
             if (!$update) {
                 if ($this->getDriverName() == 'sqlite') {
@@ -382,41 +405,65 @@ class Db_Impl {
             $statement = $this->pdo_connection->prepare($sql);
             $success = $statement && $statement->execute($query_args);
             if (!$success) { return false; }
-            $object->id = $this->pdo_connection->lastInsertId();
-            $object->__meta->is_new = false;
 
             if ($default_columns) {
-                $new_values = $this->getRow('SELECT '.implode(',', $default_columns).
-                    " FROM `{$table_name}` WHERE id = ?", array($object->id));
+                $sql = 'SELECT '.implode(',', $default_columns)." FROM `{$table_name}` WHERE ";
+                $query_args = array();
+                if ($object->__meta->table->row_id) {
+                    $sql .= "`{$object->__meta->table->row_id}` = ?";
+                    $query_args[] = $this->pdo_connection->lastInsertId();
+                } else {
+                    $first_row = true;
+                    foreach ($object->__meta->table->primary_key as $x) {
+                        if (!$first_row) { $sql .= " AND "; }
+                        $first_row = false;
+                        $sql .= "`{$x}` = ?";
+                        $query_args[] = $object->$x;
+                    }
+                }
+                $new_values = $this->getRow($sql, $query_args);
                 if (!$new_values) { return false; }
                 foreach($new_values as $key => $value) { $object->$key = $value; }
             }
 
-            return true;
+            $object->__meta->is_new = false;
         } else {
-            // TODO: What if id has been updated?
-            if ($default_columns) { return $this->error("Default in update object"); }
+            if ($default_columns) { return $this->error("Default column in update object"); }
 
             $sql = "UPDATE `{$table_name}` SET ";
             $sql .= implode(',', array_map(function($name) { return "`{$name}` = ?"; }, array_keys($update)));
-            $sql .= " WHERE {$id_name} = ?";
             $query_args = array_values($update);
-            $query_args[] = $id;
-
+            $sql .= " WHERE ";
+            $first_row = true;
+            foreach ($object->__meta->primary_key_value as $column_name => $column_value) {
+                if (!$first_row) { $sql .= " AND "; }
+                $first_row = false;
+                $sql .= "`{$column_name}` = ?";
+                $query_args[] = $column_value;
+            }
             $statement = $this->pdo_connection->prepare($sql);
-            return $statement && $statement->execute($query_args);
+            if (!($statement && $statement->execute($query_args))) { return false; }
         }
+
+        $primary_key = array();
+        foreach ($object->__meta->table->primary_key as $column_name) {
+            $primary_key[$column_name] = $object->{$column_name};
+        }
+        $object->__meta->primary_key_value = $primary_key;
+
+        return true;
     }
 
     public function trash($object) {
-        $id = $object->id;
-        $table_name = $object->__meta->table->name;
-        if (!$id) {
-            throw new RuntimeException("No id.");
+        assert(!$object->__meta->is_new);
+        $sql = "DELETE FROM `{$object->__meta->table->name}` WHERE ";
+        $first_row = true;
+        foreach ($object->__meta->primary_key_value as $column_name => $column_value) {
+            if (!$first_row) { $sql .= " AND "; }
+            $first_row = false;
+            $sql .= "`{$column_name}` = ?";
+            $query_args[] = $column_value;
         }
-        $sql = "DELETE FROM `{$table_name}` WHERE id = ?";
-        $query_args = array($id);
-
         $statement = $this->pdo_connection->prepare($sql);
         return $statement && $statement->execute($query_args);
     }
@@ -441,20 +488,18 @@ class Db_Impl {
         if (!$success) { return $this->error("Error finding table: {$table_name}"); }
 
         $columns = array();
+        $primary_key = array();
 
         while($column = $statement->fetchObject()) {
             $name = $column->name;
+            if ($column->pk) {
+                $primary_key[$column->pk] = $column->name;
+            }
             $default = trim(strtolower($column->dflt_value));
             if ($default === '') { $default = 'null'; }
             switch($default[0]) {
             case 'n':
-                // Crude attempt at support autoincrementing columns.
-                if ($default === 'null' && $column->pk) {
-                    $default_value = Db_Default::$instance;
-                }
-                else {
-                    $default_value = null;
-                }
+                $default_value = null;
                 break;
             case '"':
                 if (preg_match('@^"(.*)"$@', $column->dflt_value, $matches)) {
@@ -498,7 +543,52 @@ class Db_Impl {
         }
         if (!$columns) { return $this->error("Error finding table: {$table_name}"); }
 
-        return new Db_TableSchema($table_name, $columns);
+        ksort($primary_key);
+        $primary_key = array_values($primary_key);
+
+        // Get the name of the primary key, in order to check if it includes a rowid.
+        $primary_key_name = null;
+        if ($primary_key) {
+            $sql = "PRAGMA index_list(`{$table_name}`)";
+            $statement = $this->pdo_connection->prepare($sql);
+            $success = $statement && $statement->execute(array());
+            if (!$success) { return $this->error("Error getting indexes for: {$table_name}"); }
+            while($column = $statement->fetchObject()) {
+                if ($column->origin == 'pk') {
+                    $primary_key_name = $column->name;
+                }
+            }
+        }
+
+        // Check if the primary key includes a rowid
+        $row_id = null;
+        if ($primary_key_name) {
+            $sql = "PRAGMA index_xinfo(`{$primary_key_name}`)";
+            $statement = $this->pdo_connection->prepare($sql);
+            $success = $statement && $statement->execute(array());
+            if (!$success) { return $this->error("Error getting primary key for: {$table_name}"); }
+            while($column = $statement->fetchObject()) {
+                if ($column->cid == -1) { $row_id = true; }
+            }
+        } else if ($primary_key) {
+            assert(count($primary_key) == 1);
+            $row_id = $primary_key[0];
+        } else {
+            $row_id = true;
+        }
+
+        // There's a rowid, but no name for it, so check if the standard names are available
+        if ($row_id === true) {
+            if (!array_key_exists('rowid', $columns)) { $row_id = 'rowid'; }
+            else if (!array_key_exists('oid', $columns)) { $row_id = 'oid'; }
+            else if (!array_key_exists('_rowid_', $columns)) { $row_id = '_rowid_'; }
+            else if ($primary_key) { $row_id = null; }
+            else return $this->error("Can't get rowid column for {$table_name}");
+        }
+
+        if ($row_id) { $columns[$row_id] = Db_Default::$instance; }
+
+        return new Db_TableSchema($table_name, $columns, $primary_key ?: array($row_id), $row_id);
     }
 
     private function getTableFromMysql($table_name) {
@@ -507,11 +597,14 @@ class Db_Impl {
         $success = $statement && $statement->execute(array());
         if (!$success) { return $this->error("Error finding table: {$table_name}"); }
 
-        $columsn = array();
+        $columns = array();
+        $primary_key = array();
+        $first_auto_increment = null;
         while($column = $statement->fetchObject()) {
             $name = $column->Field;
             if (preg_match('@\bauto_increment\b@', strtolower($column->Extra))) {
                 $default_value = Db_Default::$instance;
+                if (!$first_auto_increment) { $first_auto_increment = $name; }
             }
             else if (strtolower($column->Default) == 'current_timestamp' &&
                 (strtolower($column->Type) === 'timestamp' || strtolower($column->Type) === 'datetime'))
@@ -521,10 +614,21 @@ class Db_Impl {
             else {
                 $default_value = $column->Default;
             }
+            if ($column->Key == 'PRI') {
+                $primary_key[] = $name;
+            }
             $columns[$name] = $default_value;
         }
 
-        return new Db_TableSchema($table_name, $columns);
+        if (!$primary_key) {
+            return $this->error("Mysql currently requires a primary key");
+        }
+
+        // This is weird. Is it right?
+        $row_id = count($primary_key) == 1 && $primary_key[0] == $first_auto_increment ?
+            $first_auto_increment : null;
+
+        return new Db_TableSchema($table_name, $columns, $primary_key, $row_id);
     }
 }
 
