@@ -131,6 +131,20 @@ class Db_Impl {
         return $this->pdo_connection->getAttribute(PDO::ATTR_DRIVER_NAME);
     }
 
+    private function error($message) {
+        $connection = $this->pdo_connection ?: $this->saved_pdo_connection;
+        switch($connection->getAttribute(PDO::ATTR_ERRMODE)) {
+        case PDO::ERRMODE_SILENT:
+            return false;
+        case PDO::ERRMODE_WARNING:
+            trigger_error($message, E_USER_WARNING);
+            return false;
+        default:
+            throw new RuntimeException($message);
+        }
+    }
+
+    // This throws exceptions on error regardless of PDO's error mode
     public function transaction($callback) {
         static $depth = 0;
         if ($depth == 0) { $this->begin(); }
@@ -173,6 +187,7 @@ class Db_Impl {
         }
     }
 
+    // This throws exceptions on error regardless of PDO's error mode
     public function getIterator($sql, $query_args = array()) {
         $statement = $this->pdo_connection->prepare($sql);
         if ($statement && $statement->execute($query_args)) {
@@ -220,6 +235,8 @@ class Db_Impl {
 
     public function dispense($table_name) {
         $table = $this->getTable($table_name);
+        if (!$table) { return false; }
+
         $object = new self::$entity_object();
         foreach ($table->columns as $name => $default_value) {
             $object->{$name} = $default_value;
@@ -256,6 +273,7 @@ class Db_Impl {
         return $this->_fetchBean($table_name, $statement);
     }
 
+    // This throws exceptions on error regardless of PDO's error mode
     public function findIterator($table_name, $query = '', array $query_args = array()) {
         $statement = $this->createFindStatement($table_name, $query, $query_args);
         if (!$statement) {
@@ -289,6 +307,8 @@ class Db_Impl {
 
     public function convertToBeans($table_name, $objects) {
         $table = $this->getTable($table_name);
+        if (!$table) { return false; }
+
         $result = array();
         foreach($objects as $array) {
             if (!is_array($array)) {
@@ -375,7 +395,7 @@ class Db_Impl {
             return true;
         } else {
             // TODO: What if id has been updated?
-            if ($default_columns) { throw new RuntimeException("Default in update object.\n"); }
+            if ($default_columns) { return $this->error("Default in update object"); }
 
             $sql = "UPDATE `{$table_name}` SET ";
             $sql .= implode(',', array_map(function($name) { return "`{$name}` = ?"; }, array_keys($update)));
@@ -418,7 +438,7 @@ class Db_Impl {
         $sql = "PRAGMA table_info(`{$table_name}`)";
         $statement = $this->pdo_connection->prepare($sql);
         $success = $statement && $statement->execute(array());
-        if (!$success) { throw new RuntimeException("Error finding table: {$table_name}.\n"); }
+        if (!$success) { return $this->error("Error finding table: {$table_name}"); }
 
         $columns = array();
 
@@ -441,7 +461,7 @@ class Db_Impl {
                     $default_value = str_replace('""', '"', $matches[1]);
                 }
                 else {
-                    throw new RuntimeException("Invalid string default");
+                    return $this->error("Invalid string default");
                 }
                 break;
             case "'":
@@ -449,7 +469,7 @@ class Db_Impl {
                     $default_value = str_replace("''", "'", $matches[1]);
                 }
                 else {
-                    throw new RuntimeException("Invalid string default");
+                    return $this->error("Invalid string default");
                 }
                 break;
             case '`':
@@ -457,7 +477,7 @@ class Db_Impl {
                     $default_value = str_replace('``', '`', $matches[1]);
                 }
                 else {
-                    throw new RuntimeException("Invalid string default");
+                    return $this->error("Invalid string default");
                 }
                 break;
             case '+': case '-':
@@ -476,7 +496,7 @@ class Db_Impl {
 
             $columns[$column->name] = $default_value;
         }
-        if (!$columns) { throw new RuntimeException("Error finding table: {$table_name}.\n"); }
+        if (!$columns) { return $this->error("Error finding table: {$table_name}"); }
 
         return new Db_TableSchema($table_name, $columns);
     }
@@ -485,7 +505,7 @@ class Db_Impl {
         $sql = "DESCRIBE `{$table_name}`";
         $statement = $this->pdo_connection->prepare($sql);
         $success = $statement && $statement->execute(array());
-        if (!$success) { throw new RuntimeException("Error finding table: {$table_name}.\n"); }
+        if (!$success) { return $this->error("Error finding table: {$table_name}"); }
 
         $columsn = array();
         while($column = $statement->fetchObject()) {
