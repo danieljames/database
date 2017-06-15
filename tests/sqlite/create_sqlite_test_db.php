@@ -11,7 +11,7 @@ $db_path = __DIR__."/test-{$version}.sqlite";
 if (is_file($db_path)) { unlink($db_path); }
 $db = Db::createSqlite($db_path);
 
-$pk_tables = [];
+$pk_tables = array();
 
 $db->exec("CREATE TABLE pk1(a STRING, b STRING, c STRING, PRIMARY KEY(a,b))");
 $pk_tables[] = 'pk1';
